@@ -1,0 +1,26 @@
+services:
+  api:
+    build: .
+    container_name: dyslexia-ai-mvp-api
+    env_file:
+      - .env
+    ports:
+      - "18080:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dyslexia-ai-mvp-frontend
+    depends_on:
+      - api
+    environment:
+      - NEXT_PUBLIC_API_URL=/api
+      - NEXT_PUBLIC_ASSISTANT_ID=agent
+      - ADAPTER_BACKEND_URL=http://api:8000
+      - NEXT_TELEMETRY_DISABLED=1
+    ports:
+      - "13000:3000"
