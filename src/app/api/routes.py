@@ -256,7 +256,7 @@ async def chat(req: ChatRequest, request: Request):
         request=req,
         device_id_salt=settings.device_id_salt,
         graph_app=graph_app,
-        history_rounds=settings.reply_history_rounds,
+        history_rounds=settings.chat_history_rounds,
     )
 
     headers = {
@@ -561,7 +561,7 @@ async def langgraph_run_stream(request: Request, thread_id: str):
         ),
         device_id_salt=settings.device_id_salt,
         graph_app=graph_app,
-        history_rounds=settings.reply_history_rounds,
+        history_rounds=settings.chat_history_rounds,
     )
 
     run_id = str(uuid4())

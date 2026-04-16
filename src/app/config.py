@@ -16,19 +16,37 @@ class Settings(BaseSettings):
     enable_langgraph_checkpoint: bool = False
 
     device_id_salt: str = "replace-this-with-a-strong-secret"
-
     processing_timeout_sec: int = 90
-    # Unified model configuration (OpenAI-compatible API)
-    # Zhipu OpenAI-compatible endpoint:
-    # https://docs.bigmodel.cn/cn/guide/develop/openai/introduction
+
+    # OpenAI-compatible endpoint settings.
     model_api_base: str = "https://open.bigmodel.cn/api/paas/v4"
     model_api_key: str = ""
     model_timeout_sec: int = 60
 
-    reply_model_name: str = "glm-4-flash"
-    reply_temperature: float = 0.7
-    reply_max_tokens: int = 900
-    reply_history_rounds: int = 3
+    # Route model.
+    route_model_name: str = "glm-4-flash"
+    route_temperature: float = 0.3
+    route_max_tokens: int = 512
+
+    # Response model.
+    response_model_name: str = "glm-4-flash"
+    response_temperature: float = 0.7
+    response_max_tokens: int = 4096
+
+    # Chat history.
+    chat_history_rounds: int = 5
+
+    # RAG.
+    retrieval_enabled: bool = True
+    retrieval_top_k: int = 3
+    collection_name: str = "xingmeng_docs"
+    chroma_persist_dir: str = "./chroma_db"
+
+    # Embeddings.
+    embedding_model_name: str = "embedding-3"
+
+    # Meta.
+    prompt_version: str = "v1.1"
 
 
 settings = Settings()

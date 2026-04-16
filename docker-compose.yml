@@ -9,6 +9,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./chroma_db:/app/chroma_db
 
   frontend:
     build:

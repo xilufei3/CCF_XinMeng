@@ -41,13 +41,13 @@ import {
 
 const STARTER_ACTIONS = [
   {
-    question: "孩子总是写反字母，可能是什么原因？",
+    question: "孩子写字总出错,是读写障碍吗?",
   },
   {
-    question: "我担心孩子跟不上，今晚可以先做什么？",
+    question: "怎么判断孩子是不是读写障碍?",
   },
   {
-    question: "给我3个今天就能做的家庭训练方法。",
+    question: "怎么联系星萌乐读?",
   },
 ];
 

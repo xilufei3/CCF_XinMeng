@@ -1,15 +1,18 @@
 import json
+import logging
+from typing import Any
 
 from fastapi import HTTPException
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
+from src.app.graph.workflow import build_graph
 from src.app.models.schemas import ChatRequest
+from src.app.prompts import PROMPT_VERSION
 from src.app.services.id_utils import build_thread_id, hash_device_id
 from src.app.services.lock_manager import thread_lock_manager
-from src.app.services.scene_logic import (
-    MODEL_UNAVAILABLE_MESSAGE,
-    stream_reply,
-)
 from src.app.services.storage import Storage
+
+logger = logging.getLogger(__name__)
 
 
 def _sse(payload: dict) -> str:
@@ -20,7 +23,7 @@ def _sse_done() -> str:
     return "data: [DONE]\n\n"
 
 
-def _extract_recent_history_rows(rows: list[dict], max_rounds: int) -> list[dict[str, str]]:
+def _extract_recent_chat_history(rows: list[dict], max_rounds: int) -> list[BaseMessage]:
     if max_rounds <= 0:
         return []
 
@@ -46,7 +49,68 @@ def _extract_recent_history_rows(rows: list[dict], max_rounds: int) -> list[dict
             if user_turns >= max_rounds:
                 break
 
-    return list(reversed(selected_rev))
+    selected = list(reversed(selected_rev))
+    messages: list[BaseMessage] = []
+    for item in selected:
+        if item["role"] == "user":
+            messages.append(HumanMessage(content=item["content"]))
+        else:
+            messages.append(AIMessage(content=item["content"]))
+    return messages
+
+
+def _extract_text_from_chunk_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                chunks.append(item["text"])
+        return "".join(chunks)
+    return ""
+
+
+async def _stream_graph_response(
+    *,
+    graph_app,
+    user_message: str,
+    session_id: str,
+    chat_history: list[BaseMessage],
+):
+    initial_state = {
+        "user_message": user_message,
+        "chat_history": chat_history,
+        "session_id": session_id,
+        "need_retrieval": False,
+        "route_reason": None,
+        "retrieved_docs": [],
+        "final_response": "",
+        "prompt_version": PROMPT_VERSION,
+    }
+
+    buffered_final_response = ""
+
+    async for event in graph_app.astream_events(initial_state, version="v2"):
+        metadata = event.get("metadata") or {}
+        node_name = metadata.get("langgraph_node")
+        event_name = event.get("event")
+
+        if event_name == "on_chat_model_stream" and node_name == "llm_response":
+            data = event.get("data") or {}
+            chunk = data.get("chunk")
+            if chunk is None:
+                continue
+            chunk_text = _extract_text_from_chunk_content(getattr(chunk, "content", ""))
+            if chunk_text:
+                yield ("token", chunk_text)
+
+        if event_name == "on_chain_end" and node_name == "llm_response":
+            output = (event.get("data") or {}).get("output")
+            if isinstance(output, dict):
+                buffered_final_response = str(output.get("final_response", "") or "")
+
+    yield ("final", buffered_final_response)
 
 
 async def stream_chat(
@@ -54,14 +118,15 @@ async def stream_chat(
     request: ChatRequest,
     device_id_salt: str,
     graph_app=None,
-    history_rounds: int = 3,
+    history_rounds: int = 5,
 ):
-    del graph_app
-
     device_id_hash = hash_device_id(request.device_id, device_id_salt)
     thread_id = build_thread_id(device_id_hash, request.process_id)
 
     await storage.upsert_process(thread_id=thread_id, device_id_hash=device_id_hash, process_id=request.process_id)
+
+    if graph_app is None:
+        graph_app = build_graph()
 
     async def gen():
         async with thread_lock_manager.lock(thread_id):
@@ -82,24 +147,31 @@ async def stream_chat(
                 raise HTTPException(status_code=409, detail="idempotency conflict") from exc
 
             history_rows = await storage.load_history(thread_id)
-            recent_history = _extract_recent_history_rows(history_rows, max_rounds=history_rounds)
+            chat_history = _extract_recent_chat_history(history_rows, max_rounds=history_rounds)
 
             try:
                 assistant_chunks: list[str] = []
-                async for piece in stream_reply(
-                    request.message,
-                    recent_history=recent_history,
-                    history_rounds=history_rounds,
+                buffered_final_response = ""
+
+                async for kind, payload in _stream_graph_response(
+                    graph_app=graph_app,
+                    user_message=request.message,
+                    session_id=thread_id,
+                    chat_history=chat_history,
                 ):
-                    if not piece:
-                        continue
-                    assistant_chunks.append(piece)
-                    yield _sse({"thread_id": thread_id, "text": piece})
+                    if kind == "token":
+                        assistant_chunks.append(payload)
+                        yield _sse({"thread_id": thread_id, "text": payload})
+                    elif kind == "final":
+                        buffered_final_response = payload
 
                 assistant_text = "".join(assistant_chunks).strip()
-                if not assistant_text:
-                    assistant_text = MODEL_UNAVAILABLE_MESSAGE
+                if not assistant_text and buffered_final_response.strip():
+                    assistant_text = buffered_final_response.strip()
                     yield _sse({"thread_id": thread_id, "text": assistant_text})
+
+                if not assistant_text:
+                    raise RuntimeError("llm_response returned empty output")
 
                 await storage.insert_assistant_active(
                     thread_id=thread_id,
@@ -111,6 +183,7 @@ async def stream_chat(
 
                 yield _sse_done()
             except Exception as exc:
+                logger.exception("stream_chat failed thread_id=%s err=%s", thread_id, exc)
                 await storage.mark_user_error(thread_id, request.client_msg_id)
                 yield _sse({"thread_id": thread_id, "error": str(exc)})
                 yield _sse_done()
