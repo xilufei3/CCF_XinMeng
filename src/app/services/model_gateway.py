@@ -12,9 +12,6 @@ class ModelRuntimeConfig:
     api_base: str
     api_key: str
     timeout_sec: int
-    intent_model_name: str
-    intent_temperature: float
-    intent_max_tokens: int
     reply_model_name: str
     reply_temperature: float
     reply_max_tokens: int
@@ -25,9 +22,6 @@ def build_model_runtime_config() -> ModelRuntimeConfig:
         api_base=settings.model_api_base.rstrip("/"),
         api_key=settings.model_api_key,
         timeout_sec=settings.model_timeout_sec,
-        intent_model_name=settings.intent_model_name,
-        intent_temperature=settings.intent_temperature,
-        intent_max_tokens=settings.intent_max_tokens,
         reply_model_name=settings.reply_model_name,
         reply_temperature=settings.reply_temperature,
         reply_max_tokens=settings.reply_max_tokens,
@@ -174,19 +168,6 @@ class ModelGateway:
 
                     buffer = normalized
 
-    async def generate_intent_json(self, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
-        raw = await self._chat_completion(
-            model=self.cfg.intent_model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=self.cfg.intent_temperature,
-            max_tokens=self.cfg.intent_max_tokens,
-            force_json=True,
-        )
-        return parse_json_payload(raw)
-
     async def generate_reply_text(self, *, system_prompt: str, user_prompt: str) -> str:
         return await self._chat_completion(
             model=self.cfg.reply_model_name,
@@ -198,28 +179,6 @@ class ModelGateway:
             max_tokens=self.cfg.reply_max_tokens,
             force_json=False,
         )
-
-
-def parse_json_payload(text: str) -> dict[str, Any]:
-    # First pass: direct JSON
-    try:
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            return payload
-    except Exception:
-        pass
-
-    # Fallback: extract first {...} segment
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        chunk = text[start : end + 1]
-        payload = json.loads(chunk)
-        if isinstance(payload, dict):
-            return payload
-    raise ValueError(f"cannot parse json payload from model text: {text}")
-
-
 _gateway: ModelGateway | None = None
 
 

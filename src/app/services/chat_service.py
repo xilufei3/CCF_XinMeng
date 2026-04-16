@@ -7,8 +7,7 @@ from src.app.services.id_utils import build_thread_id, hash_device_id
 from src.app.services.lock_manager import thread_lock_manager
 from src.app.services.scene_logic import (
     MODEL_UNAVAILABLE_MESSAGE,
-    classify_intent,
-    stream_scene_reply,
+    stream_reply,
 )
 from src.app.services.storage import Storage
 
@@ -86,13 +85,8 @@ async def stream_chat(
             recent_history = _extract_recent_history_rows(history_rows, max_rounds=history_rounds)
 
             try:
-                route = await classify_intent(request.message)
-                scene = route.intent
-                intent = route.intent
-
                 assistant_chunks: list[str] = []
-                async for piece in stream_scene_reply(
-                    scene,
+                async for piece in stream_reply(
                     request.message,
                     recent_history=recent_history,
                     history_rounds=history_rounds,
@@ -111,8 +105,6 @@ async def stream_chat(
                     thread_id=thread_id,
                     client_msg_id=request.client_msg_id,
                     content=assistant_text,
-                    scene=scene,
-                    intent_tag=intent,
                     cached=False,
                 )
                 await storage.mark_user_active(thread_id, request.client_msg_id)

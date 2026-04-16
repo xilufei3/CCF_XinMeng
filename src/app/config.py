@@ -25,10 +25,6 @@ class Settings(BaseSettings):
     model_api_key: str = ""
     model_timeout_sec: int = 60
 
-    intent_model_name: str = "glm-4-flash"
-    intent_temperature: float = 0.2
-    intent_max_tokens: int = 300
-
     reply_model_name: str = "glm-4-flash"
     reply_temperature: float = 0.7
     reply_max_tokens: int = 900

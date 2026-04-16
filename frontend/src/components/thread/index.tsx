@@ -41,16 +41,13 @@ import {
 
 const STARTER_ACTIONS = [
   {
-    title: "先做认知科普",
-    hint: "比如：孩子总是写反字母，可能是什么原因？",
+    question: "孩子总是写反字母，可能是什么原因？",
   },
   {
-    title: "缓解家长焦虑",
-    hint: "比如：我担心孩子跟不上，今晚可以先做什么？",
+    question: "我担心孩子跟不上，今晚可以先做什么？",
   },
   {
-    title: "家庭干预建议",
-    hint: "比如：给我3个今天就能做的家庭训练方法。",
+    question: "给我3个今天就能做的家庭训练方法。",
   },
 ];
 
@@ -440,16 +437,13 @@ export function Thread() {
                       <div className="mt-5 grid gap-3 md:grid-cols-3">
                         {STARTER_ACTIONS.map((item) => (
                           <button
-                            key={item.title}
+                            key={item.question}
                             type="button"
                             className="rounded-2xl border border-[#ffe1c2] bg-[#fffbf6] p-3 text-left transition hover:-translate-y-0.5 hover:border-[#ffbf7a] hover:shadow-sm"
-                            onClick={() => setInput(item.hint)}
+                            onClick={() => setInput(item.question)}
                           >
-                            <p className="text-sm font-semibold text-[#8c4a00]">
-                              {item.title}
-                            </p>
-                            <p className="mt-1 text-xs leading-5 text-[#91765b]">
-                              {item.hint}
+                            <p className="text-sm leading-6 font-medium text-[#8c4a00]">
+                              {item.question}
                             </p>
                           </button>
                         ))}

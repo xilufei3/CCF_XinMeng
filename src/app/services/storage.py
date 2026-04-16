@@ -19,8 +19,6 @@ CREATE TABLE IF NOT EXISTS process_messages (
   thread_id TEXT NOT NULL,
   client_msg_id TEXT NOT NULL,
   role TEXT NOT NULL,
-  scene TEXT,
-  intent_tag TEXT,
   content TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   cached INTEGER NOT NULL DEFAULT 0,
@@ -116,22 +114,20 @@ class Storage:
         thread_id: str,
         client_msg_id: str,
         content: str,
-        scene: str | None,
-        intent_tag: str | None,
         cached: bool = False,
     ) -> None:
         sql = """
         INSERT OR IGNORE INTO process_messages
-        (thread_id, client_msg_id, role, content, scene, intent_tag, status, cached)
-        VALUES (?, ?, 'assistant', ?, ?, ?, 'active', ?)
+        (thread_id, client_msg_id, role, content, status, cached)
+        VALUES (?, ?, 'assistant', ?, 'active', ?)
         """
         async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute(sql, (thread_id, client_msg_id, content, scene, intent_tag, int(cached)))
+            await conn.execute(sql, (thread_id, client_msg_id, content, int(cached)))
             await conn.commit()
 
     async def load_history(self, thread_id: str) -> list[dict]:
         sql = """
-        SELECT role, content, scene, intent_tag, created_at
+        SELECT role, content, created_at
         FROM process_messages
         WHERE thread_id = ? AND status = 'active'
         ORDER BY id ASC

@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -13,8 +13,6 @@ class ChatRequest(BaseModel):
 class HistoryMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
-    scene: Optional[str] = None
-    intent_tag: Optional[str] = None
     created_at: str
 
 
