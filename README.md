@@ -63,6 +63,11 @@ make logs
 make down
 ```
 
+服务器从零部署请参考：
+
+- `DEPLOY_SERVER_DOCKER.md`
+- `DEPLOY_SERVER_NO_DOCKER.md`
+
 ## 本地开发（不使用 Docker）
 
 1. 安装依赖
