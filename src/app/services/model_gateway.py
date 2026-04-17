@@ -42,7 +42,9 @@ class ModelGateway:
         force_json: bool = False,
     ) -> str:
         if not self.cfg.api_key:
-            raise RuntimeError("MODEL_API_KEY is empty; please configure model_api_key in .env")
+            raise RuntimeError(
+                "API key is empty; please set GLM_API_KEY or MODEL_API_KEY in environment/.env"
+            )
 
         url = f"{self.cfg.api_base}/chat/completions"
         headers = {
@@ -105,7 +107,9 @@ class ModelGateway:
         user_prompt: str,
     ):
         if not self.cfg.api_key:
-            raise RuntimeError("MODEL_API_KEY is empty; please configure model_api_key in .env")
+            raise RuntimeError(
+                "API key is empty; please set GLM_API_KEY or MODEL_API_KEY in environment/.env"
+            )
 
         url = f"{self.cfg.api_base}/chat/completions"
         headers = {

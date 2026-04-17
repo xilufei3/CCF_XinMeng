@@ -1,3 +1,4 @@
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,7 +21,8 @@ class Settings(BaseSettings):
 
     # OpenAI-compatible endpoint settings.
     model_api_base: str = "https://open.bigmodel.cn/api/paas/v4"
-    model_api_key: str = ""
+    model_api_key: str = Field(default="", validation_alias="MODEL_API_KEY")
+    glm_api_key: str = Field(default="", validation_alias="GLM_API_KEY", repr=False)
     model_timeout_sec: int = 60
 
     # Route model.
@@ -47,6 +49,13 @@ class Settings(BaseSettings):
 
     # Meta.
     prompt_version: str = "v1.1"
+
+    @model_validator(mode="after")
+    def _resolve_model_api_key(self):
+        # Keep compatibility with either env var name:
+        # api_key = os.getenv("GLM_API_KEY") or os.getenv("MODEL_API_KEY")
+        self.model_api_key = self.glm_api_key or self.model_api_key
+        return self
 
 
 settings = Settings()
