@@ -2,7 +2,6 @@ import json
 import logging
 from typing import Any
 
-from fastapi import HTTPException
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from src.app.graph.workflow import build_graph
@@ -129,27 +128,37 @@ async def stream_chat(
         graph_app = build_graph()
 
     async def gen():
-        async with thread_lock_manager.lock(thread_id):
-            cached_text = await storage.find_cached_assistant(thread_id, request.client_msg_id)
-            if cached_text is not None:
-                yield _sse({"thread_id": thread_id, "cached": True, "text": cached_text})
-                yield _sse_done()
-                return
+        inserted_processing = False
+        try:
+            async with thread_lock_manager.lock(thread_id):
+                cached_text = await storage.find_cached_assistant(thread_id, request.client_msg_id)
+                if cached_text is not None:
+                    yield _sse({"thread_id": thread_id, "cached": True, "text": cached_text})
+                    yield _sse_done()
+                    return
 
-            if await storage.has_processing_user(thread_id, request.client_msg_id):
-                yield _sse({"thread_id": thread_id, "status": "processing", "code": 202})
-                yield _sse_done()
-                return
+                if await storage.has_processing_user(thread_id, request.client_msg_id):
+                    yield _sse({"thread_id": thread_id, "status": "processing", "code": 202})
+                    yield _sse_done()
+                    return
 
-            try:
-                await storage.insert_user_processing(thread_id, request.client_msg_id, request.message)
-            except Exception as exc:
-                raise HTTPException(status_code=409, detail="idempotency conflict") from exc
+                try:
+                    await storage.insert_user_processing(thread_id, request.client_msg_id, request.message)
+                    inserted_processing = True
+                except Exception as exc:
+                    logger.warning(
+                        "stream_chat idempotency conflict thread_id=%s client_msg_id=%s err=%s",
+                        thread_id,
+                        request.client_msg_id,
+                        exc,
+                    )
+                    yield _sse({"thread_id": thread_id, "error": "idempotency conflict", "code": 409})
+                    yield _sse_done()
+                    return
 
-            history_rows = await storage.load_history(thread_id)
-            chat_history = _extract_recent_chat_history(history_rows, max_rounds=history_rounds)
+                history_rows = await storage.load_history(thread_id)
+                chat_history = _extract_recent_chat_history(history_rows, max_rounds=history_rounds)
 
-            try:
                 assistant_chunks: list[str] = []
                 buffered_final_response = ""
 
@@ -182,10 +191,18 @@ async def stream_chat(
                 await storage.mark_user_active(thread_id, request.client_msg_id)
 
                 yield _sse_done()
-            except Exception as exc:
-                logger.exception("stream_chat failed thread_id=%s err=%s", thread_id, exc)
-                await storage.mark_user_error(thread_id, request.client_msg_id)
-                yield _sse({"thread_id": thread_id, "error": str(exc)})
-                yield _sse_done()
+        except Exception as exc:
+            logger.exception("stream_chat failed thread_id=%s err=%s", thread_id, exc)
+            if inserted_processing:
+                try:
+                    await storage.mark_user_error(thread_id, request.client_msg_id)
+                except Exception:
+                    logger.exception(
+                        "stream_chat mark_user_error failed thread_id=%s client_msg_id=%s",
+                        thread_id,
+                        request.client_msg_id,
+                    )
+            yield _sse({"thread_id": thread_id, "error": str(exc)})
+            yield _sse_done()
 
     return thread_id, gen()
