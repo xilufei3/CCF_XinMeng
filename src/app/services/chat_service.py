@@ -12,6 +12,7 @@ from src.app.services.lock_manager import thread_lock_manager
 from src.app.services.storage import Storage
 
 logger = logging.getLogger(__name__)
+_STREAM_EVENT_NAMES = {"on_chat_model_stream", "on_llm_stream"}
 
 
 def _sse(payload: dict) -> str:
@@ -70,6 +71,23 @@ def _extract_text_from_chunk_content(content: Any) -> str:
     return ""
 
 
+def _looks_like_llm_response_node(metadata: dict[str, Any]) -> bool:
+    node_hints: list[str] = []
+    for key in ("langgraph_node", "node_name", "langgraph_path"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            node_hints.append(value)
+        elif isinstance(value, (list, tuple)):
+            node_hints.extend(item for item in value if isinstance(item, str))
+
+    if not node_hints:
+        # Some library versions omit node hints on stream events.
+        # In this case we accept the event to keep streaming compatible.
+        return True
+
+    return any("llm_response" in hint for hint in node_hints)
+
+
 async def _stream_graph_response(
     *,
     graph_app,
@@ -92,10 +110,9 @@ async def _stream_graph_response(
 
     async for event in graph_app.astream_events(initial_state, version="v2"):
         metadata = event.get("metadata") or {}
-        node_name = metadata.get("langgraph_node")
         event_name = event.get("event")
 
-        if event_name == "on_chat_model_stream" and node_name == "llm_response":
+        if event_name in _STREAM_EVENT_NAMES and _looks_like_llm_response_node(metadata):
             data = event.get("data") or {}
             chunk = data.get("chunk")
             if chunk is None:
@@ -104,9 +121,9 @@ async def _stream_graph_response(
             if chunk_text:
                 yield ("token", chunk_text)
 
-        if event_name == "on_chain_end" and node_name == "llm_response":
+        if event_name == "on_chain_end":
             output = (event.get("data") or {}).get("output")
-            if isinstance(output, dict):
+            if isinstance(output, dict) and "final_response" in output:
                 buffered_final_response = str(output.get("final_response", "") or "")
 
     yield ("final", buffered_final_response)
