@@ -11,6 +11,8 @@ from src.app.prompts.route import ROUTE_SYSTEM_PROMPT
 from src.app.services.llm import get_route_llm
 
 logger = logging.getLogger(__name__)
+MAX_REASON_LEN = 30
+DEFAULT_NON_RETRIEVAL_REASON = "默认不检索:路由结果格式异常"
 
 
 class RouteDecision(BaseModel):
@@ -165,43 +167,125 @@ def _preview(text: str, limit: int = 220) -> str:
     return f"{compact[:limit]}..."
 
 
-def _parse_decision_from_text(raw_text: str) -> RouteDecision:
+def _clip_reason(reason: str, fallback: str) -> str:
+    normalized = " ".join(str(reason).split()).strip()
+    if not normalized:
+        return fallback
+    return normalized[:MAX_REASON_LEN]
+
+
+def _sanitize_decision(decision: RouteDecision, fallback_reason: str) -> RouteDecision:
+    return RouteDecision(
+        need_retrieval=bool(decision.need_retrieval),
+        reason=_clip_reason(decision.reason, fallback_reason),
+    )
+
+
+def _default_non_retrieval_decision(reason: str = DEFAULT_NON_RETRIEVAL_REASON) -> RouteDecision:
+    return RouteDecision(
+        need_retrieval=False,
+        reason=_clip_reason(reason, DEFAULT_NON_RETRIEVAL_REASON),
+    )
+
+
+def _parse_decision_from_keywords(raw_text: str) -> RouteDecision | None:
+    normalized = " ".join(raw_text.split())
+    lowered = normalized.lower()
+
+    negative_hints = (
+        "不需要检索",
+        "无需检索",
+        "不触发检索",
+        "不要触发检索",
+        "通用对话",
+        "branch_0",
+        "日常闲聊",
+        "信息不足",
+    )
+    positive_hints = (
+        "需要检索",
+        "应检索",
+        "建议检索",
+        "触发检索",
+        "走专业咨询",
+        "专业咨询",
+        "需要专业资料",
+        "需要专业知识",
+    )
+
+    has_negative = any(hint in normalized or hint in lowered for hint in negative_hints)
+    has_positive = any(hint in normalized or hint in lowered for hint in positive_hints)
+
+    decision_snippet = ""
+    match = re.search(r"(?:路由决策|结论|最终判断)(?:为|是|:)\s*([^。；\n]+)", normalized)
+    if match:
+        decision_snippet = match.group(1).strip()
+        snippet_lowered = decision_snippet.lower()
+        has_negative = has_negative or any(
+            hint in decision_snippet or hint in snippet_lowered for hint in negative_hints
+        )
+        has_positive = has_positive or any(
+            hint in decision_snippet or hint in snippet_lowered for hint in positive_hints
+        )
+
+    if has_positive and not has_negative:
+        return RouteDecision(
+            need_retrieval=True,
+            reason=_clip_reason(decision_snippet, "关键词判定:需要检索"),
+        )
+    if has_negative and not has_positive:
+        return RouteDecision(
+            need_retrieval=False,
+            reason=_clip_reason(decision_snippet, "关键词判定:无需检索"),
+        )
+    return None
+
+
+def _try_parse_decision_from_text(raw_text: str) -> RouteDecision | None:
     candidates = _build_parse_candidates(raw_text)
 
-    last_error: Exception | None = None
     for candidate in candidates:
         try:
-            return RouteDecision.model_validate_json(candidate)
-        except Exception as exc:
-            last_error = exc
+            parsed = RouteDecision.model_validate_json(candidate)
+            return _sanitize_decision(parsed, DEFAULT_NON_RETRIEVAL_REASON)
+        except Exception:
+            pass
         try:
-            parsed = json.loads(candidate)
-            return RouteDecision.model_validate(parsed)
-        except Exception as exc:
-            last_error = exc
+            payload = json.loads(candidate)
+            parsed = RouteDecision.model_validate(payload)
+            return _sanitize_decision(parsed, DEFAULT_NON_RETRIEVAL_REASON)
+        except Exception:
+            pass
 
-    raise RuntimeError(
-        f"failed to parse RouteDecision from raw model output. preview={_preview(raw_text)!r}"
-    ) from last_error
+    return _parse_decision_from_keywords(raw_text)
+
 
 
 def _coerce_route_decision(route_result: Any, session_id: str = "") -> RouteDecision:
     if isinstance(route_result, RouteDecision):
-        return route_result
+        return _sanitize_decision(route_result, DEFAULT_NON_RETRIEVAL_REASON)
 
     if isinstance(route_result, dict):
         parsed = route_result.get("parsed")
         if isinstance(parsed, RouteDecision):
-            return parsed
+            return _sanitize_decision(parsed, DEFAULT_NON_RETRIEVAL_REASON)
         if isinstance(parsed, dict):
-            return RouteDecision.model_validate(parsed)
+            decision = RouteDecision.model_validate(parsed)
+            return _sanitize_decision(decision, DEFAULT_NON_RETRIEVAL_REASON)
 
         raw = route_result.get("raw")
         if raw is not None:
             raw_content = raw.content if hasattr(raw, "content") else raw
             raw_text = _content_to_text(raw_content)
             if raw_text.strip():
-                return _parse_decision_from_text(raw_text)
+                decision = _try_parse_decision_from_text(raw_text)
+                if decision is not None:
+                    return decision
+                logger.warning(
+                    "node=route stage=raw_parse_failed session_id=%s preview=%s",
+                    session_id,
+                    _preview(raw_text),
+                )
             logger.warning(
                 "node=route stage=parse_empty_raw session_id=%s raw_type=%s raw_content_type=%s",
                 session_id,
@@ -217,9 +301,44 @@ def _coerce_route_decision(route_result: Any, session_id: str = "") -> RouteDeci
     if hasattr(route_result, "content"):
         raw_text = _content_to_text(route_result.content)
         if raw_text.strip():
-            return _parse_decision_from_text(raw_text)
+            decision = _try_parse_decision_from_text(raw_text)
+            if decision is not None:
+                return decision
+            raise RuntimeError(
+                f"failed to parse RouteDecision from plain route output. preview={_preview(raw_text)!r}"
+            )
 
     raise RuntimeError(f"unsupported route result type: {type(route_result)!r}")
+
+
+def _try_plain_invoke_decision(messages: list[tuple[str, str]], session_id: str) -> RouteDecision | None:
+    try:
+        raw_result = get_route_llm().invoke(messages)
+    except Exception as exc:
+        logger.warning(
+            "node=route stage=plain_invoke_failed session_id=%s err_type=%s err=%s",
+            session_id,
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+    raw_content = raw_result.content if hasattr(raw_result, "content") else raw_result
+    raw_text = _content_to_text(raw_content)
+    if not raw_text.strip():
+        logger.warning("node=route stage=plain_empty_output session_id=%s", session_id)
+        return None
+
+    decision = _try_parse_decision_from_text(raw_text)
+    if decision is not None:
+        return decision
+
+    logger.warning(
+        "node=route stage=plain_parse_failed session_id=%s preview=%s",
+        session_id,
+        _preview(raw_text),
+    )
+    return None
 
 
 def route_node(state: GraphState) -> dict:
@@ -231,6 +350,7 @@ def route_node(state: GraphState) -> dict:
         ("system", ROUTE_SYSTEM_PROMPT),
         ("user", state["user_message"]),
     ]
+    decision = _default_non_retrieval_decision()
 
     try:
         route_result = _get_route_chain().invoke(messages)
@@ -242,13 +362,15 @@ def route_node(state: GraphState) -> dict:
             type(exc).__name__,
             exc,
         )
-        # Fallback to plain invocation so local sanitizer/parser can still recover.
-        raw_result = get_route_llm().invoke(messages)
-        raw_content = raw_result.content if hasattr(raw_result, "content") else raw_result
-        raw_text = _content_to_text(raw_content)
-        if not raw_text.strip():
-            raise RuntimeError("route plain invoke returned empty content") from exc
-        decision = _parse_decision_from_text(raw_text)
+        fallback_decision = _try_plain_invoke_decision(messages, session_id=session_id)
+        if fallback_decision is not None:
+            decision = fallback_decision
+        else:
+            logger.warning(
+                "node=route stage=default_non_retrieval session_id=%s reason=%s",
+                session_id,
+                decision.reason,
+            )
     elapsed_ms = int((perf_counter() - start) * 1000)
     logger.info(
         "node=route stage=end session_id=%s elapsed_ms=%s need_retrieval=%s reason=%s",

@@ -101,6 +101,38 @@ def test_route_node_recovers_from_fenced_json(monkeypatch):
     assert result["route_reason"] == "日常闲聊"
 
 
+def test_route_node_keyword_fallback_for_non_json_output(monkeypatch):
+    monkeypatch.setattr(route_module, "_get_route_chain", lambda: _BrokenRouteChain())
+    monkeypatch.setattr(
+        route_module,
+        "get_route_llm",
+        lambda: _PlainLLM(
+            "1. 用户询问关于读写障碍的定义。"
+            "2. 用户问题需要专业知识库中的信息来回答。"
+            "3. 路由决策为需要检索专业知识库。"
+        ),
+    )
+
+    result = route_node({"user_message": "什么是读写障碍", "session_id": "s-5"})
+
+    assert result["need_retrieval"] is True
+    assert "需要检索" in result["route_reason"]
+
+
+def test_route_node_defaults_to_non_retrieval_when_unparseable(monkeypatch):
+    monkeypatch.setattr(route_module, "_get_route_chain", lambda: _BrokenRouteChain())
+    monkeypatch.setattr(
+        route_module,
+        "get_route_llm",
+        lambda: _PlainLLM("这是一段无法解析成结构化路由决策的输出"),
+    )
+
+    result = route_node({"user_message": "随机文本", "session_id": "s-6"})
+
+    assert result["need_retrieval"] is False
+    assert result["route_reason"] == "默认不检索:路由结果格式异常"
+
+
 def test_route_condition_edges():
     assert _route_next_node({"need_retrieval": True}) == "retrieve"
     assert _route_next_node({"need_retrieval": False}) == "llm_response"
