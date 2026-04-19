@@ -26,7 +26,11 @@ import { useThreads } from "./Thread";
 import { toast } from "sonner";
 import { resolveApiUrl } from "./client";
 
-export type StateType = { messages: Message[]; ui?: UIMessage[] };
+export type StateType = {
+  messages: Message[];
+  ui?: UIMessage[];
+  context?: Record<string, unknown>;
+};
 
 const useTypedStream = useStream<
   StateType,

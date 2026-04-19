@@ -150,6 +150,15 @@ export function Thread() {
   const stream = useStreamContext();
   const messages = stream.messages;
   const isLoading = stream.isLoading;
+  const progressText = useMemo(() => {
+    const context = (stream.values as { context?: Record<string, unknown> } | undefined)
+      ?.context;
+    if (!context || typeof context !== "object") return null;
+    const raw = context.progress_text;
+    if (typeof raw !== "string") return null;
+    const normalized = raw.trim();
+    return normalized.length > 0 ? normalized : null;
+  }, [stream.values]);
 
   const lastError = useRef<string | undefined>(undefined);
 
@@ -617,7 +626,14 @@ export function Thread() {
                     />
                   )}
                   {isLoading && !firstTokenReceived && (
-                    <AssistantMessageLoading />
+                    <div className="mr-auto flex flex-col items-start gap-2">
+                      <AssistantMessageLoading />
+                      {progressText && (
+                        <p className="rounded-full border border-[#ffe1c2] bg-[#fff8ef] px-3 py-1 text-xs text-[#8a4a00]">
+                          {progressText}
+                        </p>
+                      )}
+                    </div>
                   )}
                 </>
               }

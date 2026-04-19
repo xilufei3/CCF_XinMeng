@@ -679,13 +679,17 @@ async function handleRunStream(
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const emitValues = (messages: Array<Record<string, unknown>>) => {
+      const emitValues = (
+        messages: Array<Record<string, unknown>>,
+        context?: Record<string, unknown>,
+      ) => {
         controller.enqueue(
           encoder.encode(
             sseEvent(
               "values",
               {
                 messages,
+                ...(context ? { context } : {}),
               },
               String(eventSeq++),
             ),
@@ -732,6 +736,33 @@ async function handleRunStream(
           return;
         }
 
+        if (payload.progress && typeof payload.progress === "object") {
+          const progress = payload.progress as {
+            phase?: unknown;
+            text?: unknown;
+          };
+          const progressPhase =
+            typeof progress.phase === "string" ? progress.phase : "";
+          const progressText =
+            typeof progress.text === "string" ? progress.text : "";
+          emitValues(
+            assistantText
+              ? [
+                  ...baseMessages,
+                  {
+                    ...aiBase,
+                    content: assistantText,
+                  },
+                ]
+              : baseMessages,
+            {
+              progress_phase: progressPhase,
+              progress_text: progressText,
+            },
+          );
+          return;
+        }
+
         if (typeof payload.text === "string") {
           assistantText += payload.text;
           emitValues([
@@ -740,11 +771,17 @@ async function handleRunStream(
               ...aiBase,
               content: assistantText,
             },
-          ]);
+          ], {
+            progress_phase: "",
+            progress_text: "",
+          });
         }
       };
 
-      emitValues(baseMessages);
+      emitValues(baseMessages, {
+        progress_phase: "preparing",
+        progress_text: "处理中...",
+      });
 
       const reader = backendRes.body!.getReader();
       let buffer = "";
@@ -766,6 +803,21 @@ async function handleRunStream(
         if (buffer.trim()) {
           processBackendSseBlock(buffer);
         }
+        emitValues(
+          assistantText
+            ? [
+                ...baseMessages,
+                {
+                  ...aiBase,
+                  content: assistantText,
+                },
+              ]
+            : baseMessages,
+          {
+            progress_phase: "",
+            progress_text: "",
+          },
+        );
       } catch (err) {
         emitError(
           "adapter_stream_error",

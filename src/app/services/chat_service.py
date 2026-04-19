@@ -83,13 +83,7 @@ def _extract_text_from_chunk_content(content: Any) -> str:
 
 
 def _looks_like_llm_response_node(metadata: dict[str, Any]) -> bool:
-    node_hints: list[str] = []
-    for key in ("langgraph_node", "node_name", "langgraph_path"):
-        value = metadata.get(key)
-        if isinstance(value, str):
-            node_hints.append(value)
-        elif isinstance(value, (list, tuple)):
-            node_hints.extend(item for item in value if isinstance(item, str))
+    node_hints = _collect_node_hints(metadata)
 
     if not node_hints:
         # Some library versions omit node hints on stream events.
@@ -97,6 +91,21 @@ def _looks_like_llm_response_node(metadata: dict[str, Any]) -> bool:
         return True
 
     return any("llm_response" in hint for hint in node_hints)
+
+
+def _collect_node_hints(metadata: dict[str, Any]) -> list[str]:
+    node_hints: list[str] = []
+    for key in ("langgraph_node", "node_name", "langgraph_path"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            node_hints.append(value)
+        elif isinstance(value, (list, tuple)):
+            node_hints.extend(item for item in value if isinstance(item, str))
+    return node_hints
+
+
+def _contains_hint(hints: list[str], keyword: str) -> bool:
+    return any(keyword in hint for hint in hints)
 
 
 async def _stream_graph_response(
@@ -125,6 +134,10 @@ async def _stream_graph_response(
     }
 
     buffered_final_response = ""
+    last_progress_phase = ""
+
+    def _progress_payload(phase: str, text: str) -> dict[str, str]:
+        return {"phase": phase, "text": text}
     run_config = build_langfuse_runnable_config(
         session_id=session_id,
         user_id=user_id,
@@ -138,6 +151,25 @@ async def _stream_graph_response(
     async for event in graph_app.astream_events(initial_state, config=run_config, version="v2"):
         metadata = event.get("metadata") or {}
         event_name = event.get("event")
+        node_hints = _collect_node_hints(metadata)
+
+        if event_name == "on_chain_start":
+            if _contains_hint(node_hints, "retrieve") and last_progress_phase != "retrieving":
+                last_progress_phase = "retrieving"
+                yield ("progress", _progress_payload("retrieving", "知识库检索中..."))
+
+        if event_name == "on_chain_end":
+            if _contains_hint(node_hints, "retrieve") and last_progress_phase == "retrieving":
+                last_progress_phase = ""
+                yield ("progress", _progress_payload("idle", ""))
+
+        if event_name == "on_tool_start" and last_progress_phase != "web_searching":
+            last_progress_phase = "web_searching"
+            yield ("progress", _progress_payload("web_searching", "联网搜索中..."))
+
+        if event_name == "on_tool_end" and last_progress_phase == "web_searching":
+            last_progress_phase = ""
+            yield ("progress", _progress_payload("idle", ""))
 
         if event_name in _STREAM_EVENT_NAMES and _looks_like_llm_response_node(metadata):
             data = event.get("data") or {}
@@ -152,7 +184,6 @@ async def _stream_graph_response(
             output = (event.get("data") or {}).get("output")
             if isinstance(output, dict) and "final_response" in output:
                 buffered_final_response = str(output.get("final_response", "") or "")
-
     yield ("final", buffered_final_response)
 
 
@@ -240,6 +271,8 @@ async def stream_chat(
                         yield _sse({"thread_id": thread_id, "text": payload})
                     elif kind == "final":
                         buffered_final_response = payload
+                    elif kind == "progress":
+                        yield _sse({"thread_id": thread_id, "progress": payload})
 
                 assistant_text = "".join(assistant_chunks).strip()
                 if not assistant_text and buffered_final_response.strip():
