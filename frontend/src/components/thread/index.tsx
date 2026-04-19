@@ -1,9 +1,16 @@
 import { v4 as uuidv4 } from "uuid";
-import { ReactNode, useEffect, useRef } from "react";
+import {
+  FormEvent,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
-import { useState, FormEvent } from "react";
 import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
 import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";
@@ -22,6 +29,7 @@ import {
   Sparkles,
   XIcon,
   Plus,
+  FileText,
 } from "lucide-react";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
@@ -38,6 +46,13 @@ import {
   ArtifactTitle,
   useArtifactContext,
 } from "./artifact";
+import { useThreads } from "@/providers/Thread";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "../ui/sheet";
 
 const STARTER_ACTIONS = [
   {
@@ -51,6 +66,14 @@ const STARTER_ACTIONS = [
   },
 ];
 const REPORT_INIT_COMMAND = "[[REPORT_SESSION_INIT::camplus_txt]]";
+
+type ReportDocument = {
+  thread_id: string;
+  session_type: string;
+  report_id?: string | null;
+  report_text: string;
+  title?: string;
+};
 
 function StickyToBottomContent(props: {
   content: ReactNode;
@@ -96,6 +119,7 @@ function ScrollToBottom(props: { className?: string }) {
 export function Thread() {
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const [artifactOpen, closeArtifact] = useArtifactOpen();
+  const { threads } = useThreads();
 
   const [threadId, _setThreadId] = useQueryState("threadId");
   const [chatHistoryOpen, setChatHistoryOpen] = useQueryState(
@@ -108,6 +132,10 @@ export function Thread() {
   );
   const [input, setInput] = useState("");
   const [pendingReportStart, setPendingReportStart] = useState(false);
+  const [reportPanelOpen, setReportPanelOpen] = useState(false);
+  const [reportDoc, setReportDoc] = useState<ReportDocument | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const {
     contentBlocks,
     setContentBlocks,
@@ -133,7 +161,103 @@ export function Thread() {
     // close artifact and reset artifact context
     closeArtifact();
     setArtifactContext({});
+    setReportPanelOpen(false);
+    setReportDoc(null);
+    setReportError(null);
   };
+
+  const currentThread = useMemo(() => {
+    if (!threadId) return null;
+    return threads.find((item) => item.thread_id === threadId) ?? null;
+  }, [threadId, threads]);
+
+  const isReportSession = useMemo(() => {
+    if (!currentThread) return false;
+    const metadata =
+      currentThread.metadata && typeof currentThread.metadata === "object"
+        ? (currentThread.metadata as Record<string, unknown>)
+        : null;
+    return (
+      String(metadata?.session_type ?? "").trim().toLowerCase() === "report"
+    );
+  }, [currentThread]);
+
+  const hasReportInitMessage = useMemo(() => {
+    return messages.some((message) => {
+      if (message.type !== "human") return false;
+      const content = message.content;
+      if (typeof content === "string") {
+        return content.includes(REPORT_INIT_COMMAND);
+      }
+      if (!Array.isArray(content)) return false;
+      return content.some((part) => {
+        if (!part || typeof part !== "object") return false;
+        if (!("type" in part) || !("text" in part)) return false;
+        return (
+          (part as { type?: string }).type === "text" &&
+          typeof (part as { text?: unknown }).text === "string" &&
+          String((part as { text?: unknown }).text).includes(REPORT_INIT_COMMAND)
+        );
+      });
+    });
+  }, [messages]);
+
+  const canOpenReport = !!threadId && (isReportSession || hasReportInitMessage);
+  const sidePanelDesktopOpen = artifactOpen || (isLargeScreen && reportPanelOpen);
+
+  const loadReportDocument = useCallback(async (targetThreadId: string) => {
+    const response = await fetch(
+      `/api/threads/${encodeURIComponent(targetThreadId)}/report`,
+      {
+        method: "GET",
+        cache: "no-store",
+      },
+    );
+    if (!response.ok) {
+      let errorMessage = `加载报告失败 (${response.status})`;
+      try {
+        const payload = (await response.json()) as {
+          error?: unknown;
+          message?: unknown;
+        };
+        if (typeof payload?.message === "string" && payload.message.trim()) {
+          errorMessage = payload.message.trim();
+        } else if (typeof payload?.error === "string" && payload.error.trim()) {
+          errorMessage = payload.error.trim();
+        }
+      } catch {
+        // no-op
+      }
+      throw new Error(errorMessage);
+    }
+    return (await response.json()) as ReportDocument;
+  }, []);
+
+  const handleOpenReport = useCallback(async () => {
+    if (!threadId || reportLoading) return;
+    closeArtifact();
+    setReportPanelOpen(true);
+    if (reportDoc && reportDoc.thread_id === threadId) {
+      setReportError(null);
+      return;
+    }
+    setReportLoading(true);
+    setReportError(null);
+    try {
+      const next = await loadReportDocument(threadId);
+      setReportDoc(next);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "加载报告失败";
+      setReportError(message);
+      setReportDoc(null);
+    } finally {
+      setReportLoading(false);
+    }
+  }, [threadId, reportLoading, reportDoc, loadReportDocument, closeArtifact]);
+
+  const closeReportPanel = useCallback(() => {
+    setReportPanelOpen(false);
+  }, []);
 
   useEffect(() => {
     if (!stream.error) {
@@ -248,6 +372,21 @@ export function Thread() {
   );
 
   useEffect(() => {
+    if (!threadId) {
+      setReportPanelOpen(false);
+      setReportDoc(null);
+      setReportError(null);
+      setReportLoading(false);
+    }
+  }, [threadId]);
+
+  useEffect(() => {
+    if (artifactOpen && reportPanelOpen) {
+      setReportPanelOpen(false);
+    }
+  }, [artifactOpen, reportPanelOpen]);
+
+  useEffect(() => {
     if (!pendingReportStart || threadId !== null) {
       return;
     }
@@ -310,7 +449,7 @@ export function Thread() {
       <div
         className={cn(
           "grid w-full grid-cols-[1fr_0fr] transition-all duration-500",
-          artifactOpen && "grid-cols-[3fr_2fr]",
+          sidePanelDesktopOpen && "grid-cols-[3fr_2fr]",
         )}
       >
         <motion.div
@@ -402,6 +541,17 @@ export function Thread() {
               </div>
 
               <div className="flex items-center gap-2">
+                {canOpenReport && (
+                  <TooltipIconButton
+                    size="lg"
+                    className="p-4"
+                    tooltip="查看报告原文"
+                    variant="ghost"
+                    onClick={handleOpenReport}
+                  >
+                    <FileText className="size-5" />
+                  </TooltipIconButton>
+                )}
                 <TooltipIconButton
                   size="lg"
                   className="p-4"
@@ -617,18 +767,93 @@ export function Thread() {
 
         <div className="relative flex flex-col border-l border-[#f6d6b6] bg-white/70">
           <div className="absolute inset-0 flex min-w-[30vw] flex-col">
-            <div className="grid grid-cols-[1fr_auto] border-b border-[#f6d6b6] p-4">
-              <ArtifactTitle className="truncate overflow-hidden" />
-              <button
-                onClick={closeArtifact}
-                className="cursor-pointer"
-              >
-                <XIcon className="size-5" />
-              </button>
-            </div>
-            <ArtifactContent className="relative flex-grow" />
+            {reportPanelOpen ? (
+              <>
+                <div className="grid grid-cols-[1fr_auto] border-b border-[#f6d6b6] p-4">
+                  <div className="truncate overflow-hidden text-sm font-semibold text-[#8a4a00]">
+                    {reportDoc?.title || "筛查报告原文"}
+                  </div>
+                  <button
+                    onClick={closeReportPanel}
+                    className="cursor-pointer"
+                  >
+                    <XIcon className="size-5" />
+                  </button>
+                </div>
+                <div className="relative flex-grow overflow-y-auto p-4">
+                  {reportLoading && (
+                    <div className="flex items-center gap-2 text-sm text-[#8a4a00]">
+                      <LoaderCircle className="size-4 animate-spin" />
+                      <span>报告加载中...</span>
+                    </div>
+                  )}
+                  {!reportLoading && reportError && (
+                    <div className="rounded-xl border border-[#ffd6ab] bg-[#fff8ef] p-3 text-sm text-[#8a4a00]">
+                      {reportError}
+                    </div>
+                  )}
+                  {!reportLoading && !reportError && reportDoc?.report_text && (
+                    <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-[#5a3a1a]">
+                      {reportDoc.report_text}
+                    </pre>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="grid grid-cols-[1fr_auto] border-b border-[#f6d6b6] p-4">
+                  <ArtifactTitle className="truncate overflow-hidden" />
+                  <button
+                    onClick={closeArtifact}
+                    className="cursor-pointer"
+                  >
+                    <XIcon className="size-5" />
+                  </button>
+                </div>
+                <ArtifactContent className="relative flex-grow" />
+              </>
+            )}
           </div>
         </div>
+      </div>
+
+      <div className="lg:hidden">
+        <Sheet
+          open={reportPanelOpen && !isLargeScreen}
+          onOpenChange={(open) => {
+            if (isLargeScreen) return;
+            setReportPanelOpen(open);
+          }}
+        >
+          <SheetContent
+            side="right"
+            className="w-[92vw] p-0 sm:max-w-xl"
+          >
+            <SheetHeader className="border-b border-[#f6d6b6]">
+              <SheetTitle className="text-[#8a4a00]">
+                {reportDoc?.title || "筛查报告原文"}
+              </SheetTitle>
+            </SheetHeader>
+            <div className="flex-1 overflow-y-auto p-4">
+              {reportLoading && (
+                <div className="flex items-center gap-2 text-sm text-[#8a4a00]">
+                  <LoaderCircle className="size-4 animate-spin" />
+                  <span>报告加载中...</span>
+                </div>
+              )}
+              {!reportLoading && reportError && (
+                <div className="rounded-xl border border-[#ffd6ab] bg-[#fff8ef] p-3 text-sm text-[#8a4a00]">
+                  {reportError}
+                </div>
+              )}
+              {!reportLoading && !reportError && reportDoc?.report_text && (
+                <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-[#5a3a1a]">
+                  {reportDoc.report_text}
+                </pre>
+              )}
+            </div>
+          </SheetContent>
+        </Sheet>
       </div>
     </div>
   );

@@ -543,6 +543,40 @@ async def langgraph_get_thread(request: Request, thread_id: str):
     return _apply_device_cookie(response, device_id, should_set_cookie)
 
 
+@router.get("/threads/{thread_id}/report")
+async def langgraph_get_thread_report(request: Request, thread_id: str):
+    storage = request.app.state.storage
+    settings = request.app.state.settings
+    device_id, should_set_cookie = _get_or_create_device_id(request)
+    device_hash = hash_device_id(device_id, settings.device_id_salt)
+    internal_thread_id = build_thread_id(device_hash, thread_id)
+
+    process_context = await storage.get_process_context(internal_thread_id)
+    session_type = str(process_context.get("session_type", "")).strip().lower()
+    report_text = str(process_context.get("report_text") or "").strip()
+
+    if session_type != REPORT_SESSION_TYPE or not report_text:
+        response = JSONResponse(
+            {
+                "error": "report_not_found",
+                "message": f"Report not found for thread '{thread_id}'",
+            },
+            status_code=404,
+        )
+        return _apply_device_cookie(response, device_id, should_set_cookie)
+
+    response = JSONResponse(
+        {
+            "thread_id": thread_id,
+            "session_type": REPORT_SESSION_TYPE,
+            "report_id": process_context.get("report_id"),
+            "report_text": report_text,
+            "title": "筛查报告原文",
+        }
+    )
+    return _apply_device_cookie(response, device_id, should_set_cookie)
+
+
 @router.delete("/threads/{thread_id}")
 async def langgraph_delete_thread(request: Request, thread_id: str):
     storage = request.app.state.storage

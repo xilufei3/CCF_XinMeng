@@ -33,6 +33,14 @@ type BackendProcess = {
   preview?: string | null;
 };
 
+type BackendThreadReport = {
+  thread_id: string;
+  session_type: string;
+  report_id?: string | null;
+  report_text: string;
+  title?: string;
+};
+
 type AdapterState = {
   messages: Array<Record<string, unknown>>;
 };
@@ -261,6 +269,10 @@ function applyDeviceCookie(
   return res;
 }
 
+function buildBackendCookieHeader(deviceId: string): HeadersInit {
+  return { Cookie: `${DEVICE_COOKIE_KEY}=${encodeURIComponent(deviceId)}` };
+}
+
 async function safeParseJson(req: NextRequest): Promise<Record<string, any>> {
   try {
     const data = await req.json();
@@ -291,6 +303,29 @@ async function fetchBackendHistory(
     throw new Error(`history fetch failed: ${res.status} ${detail}`);
   }
   return (await res.json()) as BackendHistoryResponse;
+}
+
+async function fetchBackendThreadSummary(
+  deviceId: string,
+  threadId: string,
+): Promise<Record<string, unknown> | null> {
+  const res = await fetch(
+    buildBackendUrl(`/threads/${encodeURIComponent(threadId)}`),
+    {
+      method: "GET",
+      cache: "no-store",
+      headers: buildBackendCookieHeader(deviceId),
+    },
+  );
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    const detail = await res.text();
+    throw new Error(`thread fetch failed: ${res.status} ${detail}`);
+  }
+  const payload = await res.json();
+  return payload && typeof payload === "object"
+    ? (payload as Record<string, unknown>)
+    : null;
 }
 
 function extractLatestHumanFromInput(input: unknown): {
@@ -483,6 +518,16 @@ async function handleThreadGet(
   threadId: string,
 ): Promise<NextResponse> {
   const { deviceId, shouldSetCookie } = getOrCreateDeviceId(req);
+  try {
+    const backendThread = await fetchBackendThreadSummary(deviceId, threadId);
+    if (backendThread) {
+      const proxyRes = NextResponse.json(backendThread);
+      return applyDeviceCookie(proxyRes, deviceId, shouldSetCookie);
+    }
+  } catch (err) {
+    console.warn("threads/get fallback to history path", err);
+  }
+
   const history = await fetchBackendHistory(deviceId, threadId);
   const messages = normalizeHistoryToMessages(threadId, history.messages);
   const summary = buildThreadSummary(
@@ -494,6 +539,42 @@ async function handleThreadGet(
   );
   const res = NextResponse.json(summary);
   return applyDeviceCookie(res, deviceId, shouldSetCookie);
+}
+
+async function handleThreadReport(
+  req: NextRequest,
+  threadId: string,
+): Promise<NextResponse> {
+  const { deviceId, shouldSetCookie } = getOrCreateDeviceId(req);
+  const backendRes = await fetch(
+    buildBackendUrl(`/threads/${encodeURIComponent(threadId)}/report`),
+    {
+      method: "GET",
+      cache: "no-store",
+      headers: buildBackendCookieHeader(deviceId),
+    },
+  );
+
+  if (!backendRes.ok) {
+    let payload: Record<string, unknown>;
+    try {
+      payload = (await backendRes.json()) as Record<string, unknown>;
+    } catch {
+      const detail = await backendRes.text();
+      payload = {
+        error: "report_fetch_failed",
+        message: `report fetch failed: ${backendRes.status} ${detail}`,
+      };
+    }
+    const errorRes = NextResponse.json(payload, {
+      status: backendRes.status || 500,
+    });
+    return applyDeviceCookie(errorRes, deviceId, shouldSetCookie);
+  }
+
+  const payload = (await backendRes.json()) as BackendThreadReport;
+  const response = NextResponse.json(payload);
+  return applyDeviceCookie(response, deviceId, shouldSetCookie);
 }
 
 async function handleThreadHistory(
@@ -745,6 +826,11 @@ async function routeRequest(req: NextRequest, ctx: RouteContext) {
   }
   if (method === "GET" && threadGetMatch) {
     return handleThreadGet(req, threadGetMatch[1]);
+  }
+
+  const reportMatch = safePath.match(/^\/threads\/([^/]+)\/report$/);
+  if (method === "GET" && reportMatch) {
+    return handleThreadReport(req, reportMatch[1]);
   }
 
   const historyMatch = safePath.match(/^\/threads\/([^/]+)\/history$/);
