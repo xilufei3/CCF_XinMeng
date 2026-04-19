@@ -6,28 +6,17 @@ from typing import Any
 
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from src.app.config import settings
 from src.app.graph.state import GraphState
-from src.app.prompts.report import REPORT_INTERPRETATION_PROMPT, format_report_text_for_prompt
 from src.app.prompts.response import (
-    RESPONSE_SYSTEM_PROMPT,
-    RESPONSE_USER_PROMPT,
+    build_response_prompt_messages,
     WEB_SEARCH_FORCE_FINAL_ANSWER_PROMPT,
     WEB_SEARCH_UNAVAILABLE_FALLBACK_PROMPT,
 )
 from src.app.services.llm import get_response_llm
 
 logger = logging.getLogger(__name__)
-
-_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", "{system_prompt}"),
-        MessagesPlaceholder("chat_history"),
-        ("user", RESPONSE_USER_PROMPT),
-    ]
-)
 
 _plain_response_llm = None
 _tool_enabled_response_llm = None
@@ -80,25 +69,6 @@ def _get_tool_enabled_response_llm():
         logger.warning("bind_tools failed; fallback to no-tool mode err=%s", exc)
         return _get_plain_response_llm()
     return _tool_enabled_response_llm
-
-
-def _format_docs(docs: list[str]) -> str:
-    if not docs:
-        return "(本轮未检索知识库, 请基于通用知识回答)"
-    return "\n\n".join(f"[资料{i + 1}]\n{doc}" for i, doc in enumerate(docs))
-
-
-def build_system_prompt(report_text: str | None) -> str:
-    normalized_report_text = str(report_text or "").strip()
-    if not normalized_report_text:
-        return RESPONSE_SYSTEM_PROMPT
-
-    report_block = f"{format_report_text_for_prompt(normalized_report_text)}\n\n{REPORT_INTERPRETATION_PROMPT}\n"
-    marker = "\n# 参考资料\n"
-
-    if marker in RESPONSE_SYSTEM_PROMPT:
-        return RESPONSE_SYSTEM_PROMPT.replace(marker, f"\n{report_block}\n# 参考资料\n", 1)
-    return f"{RESPONSE_SYSTEM_PROMPT}\n\n{report_block}"
 
 
 def _message_content_to_text(content: Any) -> str:
@@ -175,17 +145,18 @@ def _tool_result_to_text(result: Any) -> str:
     return str(result)
 
 
-def _build_prompt_messages(state: GraphState, docs_text: str) -> list[BaseMessage]:
-    return _prompt.format_messages(
-        system_prompt=build_system_prompt(state.get("report_text")),
-        retrieved_docs=docs_text,
-        chat_history=state.get("chat_history", []),
+def _build_prompt_messages(state: GraphState) -> list[BaseMessage]:
+    return build_response_prompt_messages(
         user_message=state["user_message"],
+        chat_history=state.get("chat_history", []),
+        report_text=state.get("report_text"),
+        need_retrieval=bool(state.get("need_retrieval")),
+        retrieved_docs=state.get("retrieved_docs", []),
     )
 
 
-def _invoke_with_optional_web_search(state: GraphState, docs_text: str) -> AIMessage:
-    base_messages = _build_prompt_messages(state, docs_text)
+def _invoke_with_optional_web_search(state: GraphState) -> AIMessage:
+    base_messages = _build_prompt_messages(state)
     if not bool(state.get("web_search_enabled")):
         return _get_plain_response_llm().invoke(base_messages)
 
@@ -236,8 +207,7 @@ def llm_response_node(state: GraphState) -> dict:
     session_id = state.get("session_id", "")
     logger.info("node=llm_response stage=start session_id=%s", session_id)
 
-    docs_text = _format_docs(state.get("retrieved_docs", []))
-    result = _invoke_with_optional_web_search(state, docs_text)
+    result = _invoke_with_optional_web_search(state)
     final_response = _message_content_to_text(result.content).strip()
     if not final_response:
         raise RuntimeError("llm_response returned empty content")

@@ -7,7 +7,7 @@ from time import perf_counter
 from pydantic import BaseModel, Field
 
 from src.app.graph.state import GraphState
-from src.app.prompts.route import ROUTE_SYSTEM_PROMPT
+from src.app.prompts.route import build_route_messages
 from src.app.services.llm import get_route_llm
 
 logger = logging.getLogger(__name__)
@@ -346,10 +346,7 @@ def route_node(state: GraphState) -> dict:
     session_id = state.get("session_id", "")
     logger.info("node=route stage=start session_id=%s", session_id)
 
-    messages = [
-        ("system", ROUTE_SYSTEM_PROMPT),
-        ("user", state["user_message"]),
-    ]
+    messages = build_route_messages(state["user_message"])
     decision = _default_non_retrieval_decision()
 
     try:

@@ -30,7 +30,7 @@ def test_graph_end_to_end_general_branch(monkeypatch):
     monkeypatch.setattr(
         llm_response_module,
         "_invoke_with_optional_web_search",
-        lambda _state, _docs_text: AIMessage(content="你好，我在。"),
+        lambda _state: AIMessage(content="你好，我在。"),
     )
 
     graph = build_graph()
@@ -62,7 +62,7 @@ def test_graph_end_to_end_retrieval_branch(monkeypatch):
     monkeypatch.setattr(
         llm_response_module,
         "_invoke_with_optional_web_search",
-        lambda _state, _docs_text: AIMessage(content="建议联系专业老师。"),
+        lambda _state: AIMessage(content="建议联系专业老师。"),
     )
 
     graph = build_graph()
