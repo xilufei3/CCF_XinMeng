@@ -3,8 +3,8 @@ from time import perf_counter
 
 from src.app.graph.state import GraphState
 from src.app.prompts import PROMPT_VERSION
+from src.app.prompts.report import REPORT_AUTO_TRIGGER_MESSAGE
 from src.app.services.report_session import (
-    REPORT_AUTO_TRIGGER_MESSAGE,
     REPORT_SESSION_TYPE,
 )
 

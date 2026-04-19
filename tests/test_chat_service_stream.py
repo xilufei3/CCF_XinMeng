@@ -12,9 +12,10 @@ class _FakeGraphApp:
     def __init__(self, events):
         self._events = events
 
-    async def astream_events(self, initial_state, version="v2"):
+    async def astream_events(self, initial_state, config=None, version="v2"):
         assert version == "v2"
         assert isinstance(initial_state, dict)
+        assert config is None or isinstance(config, dict)
         for event in self._events:
             yield event
 
@@ -27,9 +28,11 @@ def _collect_stream_items(events):
             graph_app=graph_app,
             user_message="hello",
             session_id="s-1",
+            user_id="u-1",
             chat_history=[],
             session_type="general",
             report_text=None,
+            web_search_enabled=False,
         ):
             items.append(item)
         return items

@@ -1,7 +1,7 @@
 from typing import AsyncIterator
 
 from src.app.services.model_gateway import get_model_gateway
-from src.app.services.prompts import (
+from src.app.prompts.scene import (
     REPLY_SYSTEM_PROMPT,
     REPLY_USER_PROMPT_TEMPLATE,
 )

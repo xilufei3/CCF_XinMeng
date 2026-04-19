@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
     process_id: str = Field(min_length=1)
     client_msg_id: str = Field(min_length=1)
     message: str = Field(min_length=1)
+    web_search_enabled: bool | None = None
 
 
 class HistoryMessage(BaseModel):

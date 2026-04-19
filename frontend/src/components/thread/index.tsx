@@ -28,7 +28,6 @@ import {
   SquarePen,
   Sparkles,
   XIcon,
-  Plus,
   FileText,
 } from "lucide-react";
 import { useQueryState, parseAsBoolean } from "nuqs";
@@ -126,8 +125,8 @@ export function Thread() {
     "chatHistoryOpen",
     parseAsBoolean.withDefault(false),
   );
-  const [hideToolCalls, setHideToolCalls] = useQueryState(
-    "hideToolCalls",
+  const [webSearchEnabled, setWebSearchEnabled] = useQueryState(
+    "webSearchEnabled",
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
@@ -139,7 +138,6 @@ export function Thread() {
   const {
     contentBlocks,
     setContentBlocks,
-    handleFileUpload,
     dropRef,
     removeBlock,
     resetBlocks: _resetBlocks,
@@ -318,8 +316,10 @@ export function Thread() {
 
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
 
-    const context =
-      Object.keys(artifactContext).length > 0 ? artifactContext : undefined;
+    const context = {
+      ...artifactContext,
+      web_search_enabled: webSearchEnabled ?? false,
+    };
 
     stream.submit(
       { messages: [...toolMessages, newHumanMessage], context },
@@ -391,8 +391,10 @@ export function Thread() {
       return;
     }
 
-    const context =
-      Object.keys(artifactContext).length > 0 ? artifactContext : undefined;
+    const context = {
+      ...artifactContext,
+      web_search_enabled: webSearchEnabled ?? false,
+    };
     const hiddenInitMessage: Message = {
       id: `${DO_NOT_RENDER_ID_PREFIX}${uuidv4()}`,
       type: "human",
@@ -417,7 +419,7 @@ export function Thread() {
       },
     );
     setPendingReportStart(false);
-  }, [pendingReportStart, threadId, artifactContext, stream]);
+  }, [pendingReportStart, threadId, artifactContext, stream, webSearchEnabled]);
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -707,33 +709,17 @@ export function Thread() {
                       <div className="flex flex-wrap items-center gap-4 p-3 pt-2">
                         <div className="flex items-center space-x-2">
                           <Switch
-                            id="render-tool-calls"
-                            checked={hideToolCalls ?? false}
-                            onCheckedChange={setHideToolCalls}
+                            id="web-search-enabled"
+                            checked={webSearchEnabled ?? false}
+                            onCheckedChange={setWebSearchEnabled}
                           />
                           <Label
-                            htmlFor="render-tool-calls"
+                            htmlFor="web-search-enabled"
                             className="text-sm text-[#7c6b58]"
                           >
-                            隐藏工具调用细节
+                            联网搜索
                           </Label>
                         </div>
-
-                        <Label
-                          htmlFor="file-input"
-                          className="flex cursor-pointer items-center gap-2 text-[#7c6b58] hover:text-[#8a4a00]"
-                        >
-                          <Plus className="size-5" />
-                          <span className="text-sm">上传图片或 PDF</span>
-                        </Label>
-                        <input
-                          id="file-input"
-                          type="file"
-                          onChange={handleFileUpload}
-                          multiple
-                          accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
-                          className="hidden"
-                        />
 
                         {stream.isLoading ? (
                           <Button

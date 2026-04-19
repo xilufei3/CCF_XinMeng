@@ -29,11 +29,34 @@ function normalizeTitle(value: unknown, maxLength = 80): string | null {
   return `${normalized.slice(0, maxLength - 1)}...`;
 }
 
+const REPORT_ID_TITLE_MAP: Record<string, string> = {
+  camplus_txt: "示例报告",
+};
+
+function getReportThreadTitle(metadata: Record<string, unknown> | null): string | null {
+  if (!metadata) return null;
+  const sessionType = String(metadata.session_type ?? "").trim().toLowerCase();
+  if (sessionType !== "report") return null;
+
+  const explicitTitle = normalizeTitle(metadata.title);
+  if (explicitTitle) return explicitTitle;
+
+  const reportId = String(metadata.report_id ?? "").trim().toLowerCase();
+  const mappedTitle = REPORT_ID_TITLE_MAP[reportId];
+  if (mappedTitle) return `报告分析 · ${mappedTitle}`;
+
+  if (reportId) return `报告分析 · ${reportId}`;
+  return "报告分析";
+}
+
 function getThreadTitle(thread: Thread): string {
   const metadata =
     thread.metadata && typeof thread.metadata === "object"
       ? (thread.metadata as Record<string, unknown>)
       : null;
+  const reportTitle = getReportThreadTitle(metadata);
+  if (reportTitle) return reportTitle;
+
   const metadataTitle =
     normalizeTitle(metadata?.title) ?? normalizeTitle(metadata?.preview);
   if (metadataTitle) return metadataTitle;

@@ -9,6 +9,7 @@ class GraphState(TypedDict):
     session_id: str
     session_type: NotRequired[str]
     report_text: NotRequired[str | None]
+    web_search_enabled: NotRequired[bool]
 
     need_retrieval: bool
     route_reason: str | None

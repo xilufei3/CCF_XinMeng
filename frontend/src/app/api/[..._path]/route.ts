@@ -354,6 +354,15 @@ function extractLatestHumanFromInput(input: unknown): {
   return null;
 }
 
+function extractWebSearchEnabledFromInput(input: unknown): boolean | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const context = (input as { context?: unknown }).context;
+  if (!context || typeof context !== "object") return undefined;
+  const value = (context as { web_search_enabled?: unknown }).web_search_enabled;
+  if (typeof value === "boolean") return value;
+  return undefined;
+}
+
 async function handleInfo(req: NextRequest): Promise<NextResponse> {
   const { deviceId, shouldSetCookie } = getOrCreateDeviceId(req);
   const res = NextResponse.json({
@@ -609,6 +618,7 @@ async function handleRunStream(
   const { deviceId, shouldSetCookie } = getOrCreateDeviceId(req);
   const body = await safeParseJson(req);
   const latestHuman = extractLatestHumanFromInput(body.input);
+  const webSearchEnabled = extractWebSearchEnabledFromInput(body.input);
 
   let outgoingMessage = latestHuman?.message ?? "";
   const clientMsgId = latestHuman?.clientMsgId ?? `regen-${Date.now()}`;
@@ -646,6 +656,7 @@ async function handleRunStream(
       process_id: threadId,
       client_msg_id: clientMsgId,
       message: outgoingMessage,
+      web_search_enabled: webSearchEnabled,
     }),
   });
 

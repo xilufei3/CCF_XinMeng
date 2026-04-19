@@ -12,7 +12,6 @@ REPORT_SESSION_TYPE = "report"
 DEFAULT_REPORT_ID = "camplus_txt"
 REPORT_SESSION_INIT_PREFIX = "[[REPORT_SESSION_INIT::"
 REPORT_SESSION_INIT_SUFFIX = "]]"
-REPORT_AUTO_TRIGGER_MESSAGE = "请帮我解读这份筛查报告"
 HIDDEN_CLIENT_MSG_PREFIX = "do-not-render-"
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.app.api.routes import router
 from src.app.config import settings
 from src.app.graph.workflow import build_graph
+from src.app.services.langfuse import flush_langfuse, init_langfuse
 from src.app.services.storage import Storage
 
 
@@ -27,15 +28,18 @@ async def lifespan(app: FastAPI):
         await checkpointer.setup()
 
     graph_app = build_graph(checkpointer=checkpointer)
+    langfuse_enabled = init_langfuse()
 
     app.state.settings = settings
     app.state.storage = storage
     app.state.checkpointer = checkpointer
     app.state.graph_app = graph_app
+    app.state.langfuse_enabled = langfuse_enabled
 
     try:
         yield
     finally:
+        flush_langfuse()
         await exit_stack.aclose()
 
 

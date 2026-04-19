@@ -1,3 +1,5 @@
+REPORT_AUTO_TRIGGER_MESSAGE = "请帮我解读这份筛查报告"
+
 REPORT_INTERPRETATION_PROMPT = """# 报告解读原则
 
 你现在处于"报告解读"模式,请遵守以下原则:

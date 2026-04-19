@@ -7,10 +7,11 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from src.app.graph.workflow import build_graph
 from src.app.models.schemas import ChatRequest
 from src.app.prompts import PROMPT_VERSION
+from src.app.prompts.report import REPORT_AUTO_TRIGGER_MESSAGE
 from src.app.services.id_utils import build_thread_id, hash_device_id
+from src.app.services.langfuse import build_langfuse_runnable_config
 from src.app.services.lock_manager import thread_lock_manager
 from src.app.services.report_session import (
-    REPORT_AUTO_TRIGGER_MESSAGE,
     REPORT_SESSION_TYPE,
     is_hidden_client_msg_id,
     load_report_text,
@@ -103,9 +104,11 @@ async def _stream_graph_response(
     graph_app,
     user_message: str,
     session_id: str,
+    user_id: str,
     chat_history: list[BaseMessage],
     session_type: str,
     report_text: str | None,
+    web_search_enabled: bool,
 ):
     initial_state = {
         "user_message": user_message,
@@ -113,6 +116,7 @@ async def _stream_graph_response(
         "session_id": session_id,
         "session_type": session_type,
         "report_text": report_text,
+        "web_search_enabled": web_search_enabled,
         "need_retrieval": False,
         "route_reason": None,
         "retrieved_docs": [],
@@ -121,8 +125,17 @@ async def _stream_graph_response(
     }
 
     buffered_final_response = ""
+    run_config = build_langfuse_runnable_config(
+        session_id=session_id,
+        user_id=user_id,
+        tags=[session_type or "general", "chat"],
+        extra_metadata={
+            "web_search_enabled": bool(web_search_enabled),
+            "prompt_version": PROMPT_VERSION,
+        },
+    )
 
-    async for event in graph_app.astream_events(initial_state, version="v2"):
+    async for event in graph_app.astream_events(initial_state, config=run_config, version="v2"):
         metadata = event.get("metadata") or {}
         event_name = event.get("event")
 
@@ -216,9 +229,11 @@ async def stream_chat(
                     graph_app=graph_app,
                     user_message=outgoing_user_message,
                     session_id=thread_id,
+                    user_id=device_id_hash,
                     chat_history=chat_history,
                     session_type=str(process_context.get("session_type") or ""),
                     report_text=process_context.get("report_text"),
+                    web_search_enabled=bool(request.web_search_enabled),
                 ):
                     if kind == "token":
                         assistant_chunks.append(payload)

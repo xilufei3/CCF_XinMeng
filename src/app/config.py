@@ -50,8 +50,19 @@ class Settings(BaseSettings):
     collection_name: str = "xingmeng_docs"
     chroma_persist_dir: str = "./chroma_db"
 
+    # Web search.
+    tavily_api_key: str = Field(default="", validation_alias="TAVILY_API_KEY", repr=False)
+    web_search_max_iterations: int = 1
+    web_search_tavily_max_results: int = 5
+
     # Embeddings.
     embedding_model_name: str = "embedding-3"
+
+    # Langfuse observability.
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = Field(default="", validation_alias="LANGFUSE_PUBLIC_KEY", repr=False)
+    langfuse_secret_key: str = Field(default="", validation_alias="LANGFUSE_SECRET_KEY", repr=False)
+    langfuse_base_url: str = "https://cloud.langfuse.com"
 
     # Meta.
     prompt_version: str = "v1.1"

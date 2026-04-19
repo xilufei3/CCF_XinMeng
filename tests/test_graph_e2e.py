@@ -27,7 +27,11 @@ def test_graph_end_to_end_general_branch(monkeypatch):
     route_module._route_chain = RunnableLambda(
         lambda _: RouteDecision(need_retrieval=False, reason="通用对话")
     )
-    llm_response_module._response_chain = RunnableLambda(lambda _: AIMessage(content="你好，我在。"))
+    monkeypatch.setattr(
+        llm_response_module,
+        "_invoke_with_optional_web_search",
+        lambda _state, _docs_text: AIMessage(content="你好，我在。"),
+    )
 
     graph = build_graph()
     state = {
@@ -55,7 +59,11 @@ def test_graph_end_to_end_retrieval_branch(monkeypatch):
         lambda _: RouteDecision(need_retrieval=True, reason="需要专业资料")
     )
     monkeypatch.setattr(retrieve_module, "get_retriever", lambda: _FixedRetriever())
-    llm_response_module._response_chain = RunnableLambda(lambda _: AIMessage(content="建议联系专业老师。"))
+    monkeypatch.setattr(
+        llm_response_module,
+        "_invoke_with_optional_web_search",
+        lambda _state, _docs_text: AIMessage(content="建议联系专业老师。"),
+    )
 
     graph = build_graph()
     state = {
