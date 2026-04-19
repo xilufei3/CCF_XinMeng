@@ -15,6 +15,7 @@ type BackendHistoryMessage = {
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
+  client_msg_id?: string;
 };
 
 type BackendHistoryResponse = {
@@ -25,6 +26,8 @@ type BackendHistoryResponse = {
 type BackendProcess = {
   process_id: string;
   status: string;
+  session_type?: string;
+  report_id?: string | null;
   created_at: string;
   updated_at: string;
   preview?: string | null;
@@ -82,13 +85,36 @@ function toUiMessage(
   };
 }
 
+function resolveHistoryMessageId(
+  threadId: string,
+  message: BackendHistoryMessage,
+  index: number,
+): string {
+  const rawClientMsgId =
+    typeof message.client_msg_id === "string"
+      ? message.client_msg_id.trim()
+      : "";
+
+  if (!rawClientMsgId) {
+    return `${threadId}-m-${index}`;
+  }
+  if (message.role === "user") {
+    return rawClientMsgId;
+  }
+  if (message.role === "assistant") {
+    return `ai-${rawClientMsgId}`;
+  }
+  return `${threadId}-m-${index}`;
+}
+
 function normalizeHistoryToMessages(
   threadId: string,
   historyMessages: BackendHistoryMessage[],
 ): Array<Record<string, unknown>> {
-  return historyMessages.map((item, index) =>
-    toUiMessage(item.role, item.content, `${threadId}-m-${index}`),
-  );
+  return historyMessages.map((item, index) => {
+    const id = resolveHistoryMessageId(threadId, item, index);
+    return toUiMessage(item.role, item.content, id);
+  });
 }
 
 function appendPendingHumanMessage(
@@ -313,17 +339,41 @@ async function handleCreateThread(req: NextRequest): Promise<NextResponse> {
     (body?.metadata?.assistant_id as string | undefined) ||
     (body?.metadata?.graph_id as string | undefined) ||
     DEFAULT_ASSISTANT_ID;
+  const sessionType = String(body?.metadata?.session_type ?? "").trim();
+  const reportId = String(body?.metadata?.report_id ?? "").trim();
   const { deviceId, shouldSetCookie } = getOrCreateDeviceId(req);
   // Best-effort process pre-registration so the new thread appears in history immediately.
+  const initParams = new URLSearchParams({
+    device_id: deviceId,
+    process_id: threadId,
+  });
+  if (sessionType) {
+    initParams.set("session_type", sessionType);
+  }
+  if (reportId) {
+    initParams.set("report_id", reportId);
+  }
   fetch(
-    buildBackendUrl(
-      `/processes/init?device_id=${encodeURIComponent(deviceId)}&process_id=${encodeURIComponent(threadId)}`,
-    ),
+    buildBackendUrl(`/processes/init?${initParams.toString()}`),
     { method: "POST" },
   ).catch((err) => {
     console.warn("process init failed", err);
   });
-  const payload = buildThreadSummary(threadId, assistantId);
+  const metadataExtra =
+    sessionType.toLowerCase() === "report"
+      ? {
+          session_type: "report",
+          ...(reportId ? { report_id: reportId } : {}),
+        }
+      : undefined;
+  const payload = buildThreadSummary(
+    threadId,
+    assistantId,
+    undefined,
+    undefined,
+    undefined,
+    metadataExtra,
+  );
   const res = NextResponse.json(payload);
   return applyDeviceCookie(res, deviceId, shouldSetCookie);
 }
@@ -359,34 +409,42 @@ async function handleSearchThreads(req: NextRequest): Promise<NextResponse> {
     console.warn("threads/search fallback to empty list", err);
   }
 
-  const threads = processes.map((item) =>
-    {
-      const preview = normalizeThreadPreview(item.preview);
-      return buildThreadSummary(
-        item.process_id,
-        assistantId,
-        item.created_at,
-        item.updated_at,
-        preview
-          ? {
-              messages: [
-                {
-                  id: `${item.process_id}-preview`,
-                  type: "human",
-                  content: preview,
-                },
-              ],
-            }
-          : { messages: [] },
-        preview
-          ? {
-              title: preview,
-              preview,
-            }
-          : undefined,
-      );
-    },
-  );
+  const threads = processes.map((item) => {
+    const preview = normalizeThreadPreview(item.preview);
+    const summary = buildThreadSummary(
+      item.process_id,
+      assistantId,
+      item.created_at,
+      item.updated_at,
+      preview
+        ? {
+            messages: [
+              {
+                id: `${item.process_id}-preview`,
+                type: "human",
+                content: preview,
+              },
+            ],
+          }
+        : { messages: [] },
+      preview
+        ? {
+            title: preview,
+            preview,
+          }
+        : undefined,
+    );
+    const normalizedSessionType = String(item.session_type ?? "").trim().toLowerCase();
+    if (normalizedSessionType === "report") {
+      const metadata = (summary.metadata ?? {}) as Record<string, unknown>;
+      summary.metadata = {
+        ...metadata,
+        session_type: "report",
+        ...(item.report_id ? { report_id: item.report_id } : {}),
+      };
+    }
+    return summary;
+  });
 
   const response = NextResponse.json(threads);
   return applyDeviceCookie(response, deviceId, shouldSetCookie);

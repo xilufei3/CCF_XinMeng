@@ -9,6 +9,13 @@ from src.app.models.schemas import ChatRequest
 from src.app.prompts import PROMPT_VERSION
 from src.app.services.id_utils import build_thread_id, hash_device_id
 from src.app.services.lock_manager import thread_lock_manager
+from src.app.services.report_session import (
+    REPORT_AUTO_TRIGGER_MESSAGE,
+    REPORT_SESSION_TYPE,
+    is_hidden_client_msg_id,
+    load_report_text,
+    parse_report_init_command,
+)
 from src.app.services.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -30,10 +37,13 @@ def _extract_recent_chat_history(rows: list[dict], max_rounds: int) -> list[Base
     normalized: list[dict[str, str]] = []
     for row in rows:
         role = str(row.get("role", "")).strip().lower()
+        client_msg_id = str(row.get("client_msg_id", "")).strip()
         content = str(row.get("content", "")).strip()
         if role not in {"user", "assistant"}:
             continue
         if not content:
+            continue
+        if role == "user" and is_hidden_client_msg_id(client_msg_id):
             continue
         normalized.append({"role": role, "content": content})
 
@@ -94,11 +104,15 @@ async def _stream_graph_response(
     user_message: str,
     session_id: str,
     chat_history: list[BaseMessage],
+    session_type: str,
+    report_text: str | None,
 ):
     initial_state = {
         "user_message": user_message,
         "chat_history": chat_history,
         "session_id": session_id,
+        "session_type": session_type,
+        "report_text": report_text,
         "need_retrieval": False,
         "route_reason": None,
         "retrieved_docs": [],
@@ -136,10 +150,24 @@ async def stream_chat(
     graph_app=None,
     history_rounds: int = 5,
 ):
+    report_init_id = parse_report_init_command(request.message)
+    report_text = load_report_text(report_init_id) if report_init_id else None
+    if report_init_id and report_text is None:
+        raise RuntimeError(f"report not found: {report_init_id}")
+
+    outgoing_user_message = REPORT_AUTO_TRIGGER_MESSAGE if report_init_id else request.message
+
     device_id_hash = hash_device_id(request.device_id, device_id_salt)
     thread_id = build_thread_id(device_id_hash, request.process_id)
 
-    await storage.upsert_process(thread_id=thread_id, device_id_hash=device_id_hash, process_id=request.process_id)
+    await storage.upsert_process(
+        thread_id=thread_id,
+        device_id_hash=device_id_hash,
+        process_id=request.process_id,
+        session_type=REPORT_SESSION_TYPE if report_init_id else None,
+        report_id=report_init_id,
+        report_text=report_text,
+    )
 
     if graph_app is None:
         graph_app = build_graph()
@@ -160,7 +188,11 @@ async def stream_chat(
                     return
 
                 try:
-                    await storage.insert_user_processing(thread_id, request.client_msg_id, request.message)
+                    await storage.insert_user_processing(
+                        thread_id,
+                        request.client_msg_id,
+                        outgoing_user_message,
+                    )
                     inserted_processing = True
                 except Exception as exc:
                     logger.warning(
@@ -175,15 +207,18 @@ async def stream_chat(
 
                 history_rows = await storage.load_history(thread_id)
                 chat_history = _extract_recent_chat_history(history_rows, max_rounds=history_rounds)
+                process_context = await storage.get_process_context(thread_id)
 
                 assistant_chunks: list[str] = []
                 buffered_final_response = ""
 
                 async for kind, payload in _stream_graph_response(
                     graph_app=graph_app,
-                    user_message=request.message,
+                    user_message=outgoing_user_message,
                     session_id=thread_id,
                     chat_history=chat_history,
+                    session_type=str(process_context.get("session_type") or ""),
+                    report_text=process_context.get("report_text"),
                 ):
                     if kind == "token":
                         assistant_chunks.append(payload)

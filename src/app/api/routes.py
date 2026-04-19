@@ -9,6 +9,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from src.app.models.schemas import ChatRequest, HistoryMessage, HistoryResponse
 from src.app.services.chat_service import stream_chat
 from src.app.services.id_utils import build_thread_id, hash_device_id
+from src.app.services.report_session import (
+    DEFAULT_REPORT_ID,
+    REPORT_SESSION_TYPE,
+    load_report_text,
+    normalize_session_type,
+)
 
 router = APIRouter()
 
@@ -66,6 +72,17 @@ def _to_ui_message(role: str, content: str, message_id: str) -> dict[str, Any]:
     return {"id": message_id, "type": msg_type, "content": content}
 
 
+def _resolve_ui_message_id(process_id: str, item: dict[str, Any], idx: int) -> str:
+    role = str(item.get("role", "")).strip().lower()
+    client_msg_id = str(item.get("client_msg_id", "")).strip()
+    if client_msg_id:
+        if role in {"user", "human"}:
+            return client_msg_id
+        if role in {"assistant", "ai"}:
+            return f"ai-{client_msg_id}"
+    return f"{process_id}-m-{idx}"
+
+
 def _normalize_history_to_messages(
     process_id: str,
     history_rows: list[dict[str, Any]],
@@ -74,7 +91,8 @@ def _normalize_history_to_messages(
     for idx, item in enumerate(history_rows):
         role = str(item.get("role", "assistant"))
         content = str(item.get("content", ""))
-        messages.append(_to_ui_message(role, content, f"{process_id}-m-{idx}"))
+        message_id = _resolve_ui_message_id(process_id, item, idx)
+        messages.append(_to_ui_message(role, content, message_id))
     return messages
 
 
@@ -164,6 +182,15 @@ def _normalize_thread_preview(text: Any, limit: int = 80) -> str | None:
     if len(normalized) <= limit:
         return normalized
     return f"{normalized[: limit - 3]}..."
+
+
+def _extract_session_metadata(metadata: dict[str, Any]) -> tuple[str, str | None]:
+    session_type = normalize_session_type(str(metadata.get("session_type") or ""))
+    report_id_raw = metadata.get("report_id")
+    report_id = str(report_id_raw).strip() if report_id_raw else None
+    if session_type != REPORT_SESSION_TYPE:
+        return session_type, None
+    return session_type, report_id or DEFAULT_REPORT_ID
 
 
 def _sse_event(event: str, data: Any, event_id: str | None = None) -> str:
@@ -300,13 +327,34 @@ async def processes(
 
 
 @router.post("/processes/init")
-async def init_process(request: Request, device_id: str, process_id: str):
+async def init_process(
+    request: Request,
+    device_id: str,
+    process_id: str,
+    session_type: str | None = None,
+    report_id: str | None = None,
+):
     storage = request.app.state.storage
     settings = request.app.state.settings
 
     device_id_hash = hash_device_id(device_id, settings.device_id_salt)
     thread_id = build_thread_id(device_id_hash, process_id)
-    await storage.upsert_process(thread_id=thread_id, device_id_hash=device_id_hash, process_id=process_id)
+    normalized_session_type = normalize_session_type(session_type)
+    normalized_report_id = (report_id or "").strip() or DEFAULT_REPORT_ID
+    report_text = None
+    if normalized_session_type == REPORT_SESSION_TYPE:
+        report_text = load_report_text(normalized_report_id)
+        if report_text is None:
+            raise HTTPException(status_code=404, detail=f"report not found: {normalized_report_id}")
+
+    await storage.upsert_process(
+        thread_id=thread_id,
+        device_id_hash=device_id_hash,
+        process_id=process_id,
+        session_type=normalized_session_type if normalized_session_type == REPORT_SESSION_TYPE else None,
+        report_id=normalized_report_id if normalized_session_type == REPORT_SESSION_TYPE else None,
+        report_text=report_text,
+    )
     return {"process_id": process_id, "thread_id": thread_id, "status": "active"}
 
 
@@ -362,6 +410,7 @@ async def langgraph_create_thread(request: Request):
     process_id = str(process_id_raw).strip() if process_id_raw else str(uuid4())
 
     metadata = _safe_json(body.get("metadata"))
+    session_type, report_id = _extract_session_metadata(metadata)
     assistant_id = str(
         metadata.get("assistant_id")
         or metadata.get("graph_id")
@@ -374,14 +423,30 @@ async def langgraph_create_thread(request: Request):
     device_id, should_set_cookie = _get_or_create_device_id(request)
     device_hash = hash_device_id(device_id, settings.device_id_salt)
     internal_thread_id = build_thread_id(device_hash, process_id)
+    report_text = None
+    if session_type == REPORT_SESSION_TYPE:
+        report_text = load_report_text(report_id)
+        if report_text is None:
+            raise HTTPException(status_code=404, detail=f"report not found: {report_id}")
+
     await storage.upsert_process(
         thread_id=internal_thread_id,
         device_id_hash=device_hash,
         process_id=process_id,
+        session_type=session_type if session_type == REPORT_SESSION_TYPE else None,
+        report_id=report_id if session_type == REPORT_SESSION_TYPE else None,
+        report_text=report_text,
     )
 
+    metadata_extra = None
+    if session_type == REPORT_SESSION_TYPE:
+        metadata_extra = {
+            "session_type": REPORT_SESSION_TYPE,
+            "report_id": report_id,
+        }
+
     response = JSONResponse(
-        _build_thread_summary(process_id, assistant_id)
+        _build_thread_summary(process_id, assistant_id, metadata_extra=metadata_extra)
     )
     return _apply_device_cookie(response, device_id, should_set_cookie)
 
@@ -428,8 +493,15 @@ async def langgraph_search_threads(request: Request):
                 else {"messages": []}
             ),
             metadata_extra=(
-                {"title": preview, "preview": preview}
-                if preview
+                {
+                    **({"title": preview, "preview": preview} if preview else {}),
+                    **(
+                        {"session_type": REPORT_SESSION_TYPE, "report_id": item.get("report_id")}
+                        if str(item.get("session_type", "")).strip().lower() == REPORT_SESSION_TYPE
+                        else {}
+                    ),
+                }
+                if preview or str(item.get("session_type", "")).strip().lower() == REPORT_SESSION_TYPE
                 else None
             ),
         )
@@ -450,7 +522,14 @@ async def langgraph_get_thread(request: Request, thread_id: str):
     internal_thread_id = build_thread_id(device_hash, thread_id)
 
     rows = await storage.load_history(internal_thread_id)
+    process_context = await storage.get_process_context(internal_thread_id)
     values = {"messages": _normalize_history_to_messages(thread_id, rows)}
+    metadata_extra = None
+    if str(process_context.get("session_type", "")).strip().lower() == REPORT_SESSION_TYPE:
+        metadata_extra = {
+            "session_type": REPORT_SESSION_TYPE,
+            "report_id": process_context.get("report_id"),
+        }
     response = JSONResponse(
         _build_thread_summary(
             thread_id,
@@ -458,6 +537,7 @@ async def langgraph_get_thread(request: Request, thread_id: str):
             created_at=str(rows[0].get("created_at")) if rows else None,
             updated_at=str(rows[-1].get("created_at")) if rows else None,
             values=values,
+            metadata_extra=metadata_extra,
         )
     )
     return _apply_device_cookie(response, device_id, should_set_cookie)

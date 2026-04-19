@@ -14,6 +14,7 @@ class HistoryMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
     created_at: str
+    client_msg_id: str | None = None
 
 
 class HistoryResponse(BaseModel):

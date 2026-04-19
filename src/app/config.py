@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # Chat history.
     chat_history_rounds: int = 5
 
+    # Report session source.
+    report_source: str = "local"
+    report_local_dir: str = "./data/reports/raw"
+    report_api_url_template: str = ""
+    report_api_timeout_sec: int = 10
+
     # RAG.
     retrieval_enabled: bool = True
     retrieval_top_k: int = 3

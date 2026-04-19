@@ -50,6 +50,7 @@ const STARTER_ACTIONS = [
     question: "怎么联系星萌乐读?",
   },
 ];
+const REPORT_INIT_COMMAND = "[[REPORT_SESSION_INIT::camplus_txt]]";
 
 function StickyToBottomContent(props: {
   content: ReactNode;
@@ -106,6 +107,7 @@ export function Thread() {
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
+  const [pendingReportStart, setPendingReportStart] = useState(false);
   const {
     contentBlocks,
     setContentBlocks,
@@ -217,6 +219,15 @@ export function Thread() {
     setContentBlocks([]);
   };
 
+  const handleStartReportSession = () => {
+    if (isLoading) return;
+    setFirstTokenReceived(false);
+    setInput("");
+    setContentBlocks([]);
+    setPendingReportStart(true);
+    setThreadId(null);
+  };
+
   const handleRegenerate = (
     parentCheckpoint: Checkpoint | null | undefined,
   ) => {
@@ -235,6 +246,39 @@ export function Thread() {
   const hasNoAIOrToolMessages = !messages.find(
     (m) => m.type === "ai" || m.type === "tool",
   );
+
+  useEffect(() => {
+    if (!pendingReportStart || threadId !== null) {
+      return;
+    }
+
+    const context =
+      Object.keys(artifactContext).length > 0 ? artifactContext : undefined;
+    const hiddenInitMessage: Message = {
+      id: `${DO_NOT_RENDER_ID_PREFIX}${uuidv4()}`,
+      type: "human",
+      content: [{ type: "text", text: REPORT_INIT_COMMAND }] as Message["content"],
+    };
+    const toolMessages = ensureToolCallsHaveResponses(stream.messages);
+    stream.submit(
+      { messages: [...toolMessages, hiddenInitMessage], context },
+      {
+        streamMode: ["values"],
+        streamSubgraphs: true,
+        streamResumable: true,
+        optimisticValues: (prev) => ({
+          ...prev,
+          context,
+          messages: [
+            ...(prev.messages ?? []),
+            ...toolMessages,
+            hiddenInitMessage,
+          ],
+        }),
+      },
+    );
+    setPendingReportStart(false);
+  }, [pendingReportStart, threadId, artifactContext, stream]);
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -361,6 +405,15 @@ export function Thread() {
                 <TooltipIconButton
                   size="lg"
                   className="p-4"
+                  tooltip="报告分析(示例)"
+                  variant="ghost"
+                  onClick={handleStartReportSession}
+                >
+                  <Sparkles className="size-5" />
+                </TooltipIconButton>
+                <TooltipIconButton
+                  size="lg"
+                  className="p-4"
                   tooltip="新建对话"
                   variant="ghost"
                   onClick={() => setThreadId(null)}
@@ -447,6 +500,16 @@ export function Thread() {
                             </p>
                           </button>
                         ))}
+                      </div>
+                      <div className="mt-4">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full border-[#ffbf7a] bg-[#fff8ef] text-[#8c4a00] hover:bg-[#fff1e0]"
+                          onClick={handleStartReportSession}
+                        >
+                          报告分析（示例报告）
+                        </Button>
                       </div>
                     </div>
                   )}

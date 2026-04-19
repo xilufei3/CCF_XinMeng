@@ -28,6 +28,8 @@ def _collect_stream_items(events):
             user_message="hello",
             session_id="s-1",
             chat_history=[],
+            session_type="general",
+            report_text=None,
         ):
             items.append(item)
         return items
