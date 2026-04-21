@@ -51,9 +51,13 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./chroma_db"
 
     # Web search.
-    tavily_api_key: str = Field(default="", validation_alias="TAVILY_API_KEY", repr=False)
+    bocha_api_key: str = Field(default="", validation_alias="BOCHA_API_KEY", repr=False)
+    bocha_search_count: int = 5
+    web_search_enabled: bool = True
+    web_search_agent_model: str = "glm-4-flash"
+    web_search_fetch_timeout: int = 5
+    web_search_max_output_chars: int = 1000
     web_search_max_iterations: int = 1
-    web_search_tavily_max_results: int = 5
 
     # Embeddings.
     embedding_model_name: str = "embedding-3"

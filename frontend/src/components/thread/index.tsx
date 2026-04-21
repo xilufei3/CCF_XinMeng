@@ -506,6 +506,15 @@ export function Thread() {
                 <Sparkles className="size-4" />
                 <span className="font-medium">星萌乐读 AI 陪伴顾问</span>
               </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-[#ffbf7a] bg-[#fff8ef] text-[#8c4a00] hover:bg-[#fff1e0]"
+                onClick={handleStartReportSession}
+                disabled={isLoading}
+              >
+                报告分析（示例报告）
+              </Button>
             </div>
           )}
 
@@ -668,16 +677,6 @@ export function Thread() {
                             </p>
                           </button>
                         ))}
-                      </div>
-                      <div className="mt-4">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="w-full border-[#ffbf7a] bg-[#fff8ef] text-[#8c4a00] hover:bg-[#fff1e0]"
-                          onClick={handleStartReportSession}
-                        >
-                          报告分析（示例报告）
-                        </Button>
                       </div>
                     </div>
                   )}

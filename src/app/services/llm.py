@@ -43,3 +43,14 @@ def get_response_llm() -> ChatOpenAI:
         streaming=True,
         **_build_openai_compatible_kwargs(),
     )
+
+
+def get_web_search_agent_llm() -> ChatOpenAI:
+    # The web-search agent only needs concise extraction and summarization.
+    return ChatOpenAI(
+        model=settings.web_search_agent_model,
+        temperature=0.2,
+        max_tokens=1024,
+        streaming=False,
+        **_build_openai_compatible_kwargs(),
+    )

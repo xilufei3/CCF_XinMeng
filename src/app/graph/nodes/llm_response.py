@@ -1,10 +1,8 @@
 import json
 import logging
-import os
 from time import perf_counter
 from typing import Any
 
-from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from src.app.config import settings
@@ -15,13 +13,12 @@ from src.app.prompts.response import (
     WEB_SEARCH_UNAVAILABLE_FALLBACK_PROMPT,
 )
 from src.app.services.llm import get_response_llm
+from src.app.services.web_search_agent import get_web_search_agent_tool
 
 logger = logging.getLogger(__name__)
 
 _plain_response_llm = None
 _tool_enabled_response_llm = None
-_web_search_tool = None
-_web_search_tool_unavailable = False
 
 
 def _get_plain_response_llm():
@@ -31,35 +28,12 @@ def _get_plain_response_llm():
     return _plain_response_llm
 
 
-def _get_web_search_tool() -> TavilySearchResults | None:
-    global _web_search_tool
-    global _web_search_tool_unavailable
-
-    if _web_search_tool_unavailable:
-        return None
-    if _web_search_tool is not None:
-        return _web_search_tool
-
-    if settings.tavily_api_key.strip():
-        os.environ.setdefault("TAVILY_API_KEY", settings.tavily_api_key.strip())
-
-    try:
-        _web_search_tool = TavilySearchResults(
-            max_results=max(1, int(settings.web_search_tavily_max_results)),
-        )
-    except Exception as exc:
-        _web_search_tool_unavailable = True
-        logger.warning("web_search tool init failed; fallback to no-tool mode err=%s", exc)
-        return None
-    return _web_search_tool
-
-
 def _get_tool_enabled_response_llm():
     global _tool_enabled_response_llm
     if _tool_enabled_response_llm is not None:
         return _tool_enabled_response_llm
 
-    tool = _get_web_search_tool()
+    tool = get_web_search_agent_tool()
     if tool is None:
         return _get_plain_response_llm()
 
@@ -160,7 +134,7 @@ def _invoke_with_optional_web_search(state: GraphState) -> AIMessage:
     if not bool(state.get("web_search_enabled")):
         return _get_plain_response_llm().invoke(base_messages)
 
-    tool = _get_web_search_tool()
+    tool = get_web_search_agent_tool()
     if tool is None:
         # Web-search switch is enabled but tool is unavailable: answer directly.
         fallback_messages = base_messages + [
